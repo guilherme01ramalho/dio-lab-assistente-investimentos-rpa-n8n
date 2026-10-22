@@ -1,0 +1,364 @@
+{
+  "name": "Assistente-Investimento",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "Clientes",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        -432
+      ],
+      "id": "ecbc1994-745e-4219-b1d2-bb9962d3626f",
+      "name": "Webhook",
+      "webhookId": "26b8d7b1-f993-404f-90e5-70b7b3c99508"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        2592,
+        -432
+      ],
+      "id": "e737b9b8-3cce-412d-80f2-c78f6eba78ac",
+      "name": "Respond to Webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// CODE NODE - RECOMENDAÇÃO PERSONALIZADA DE INVESTIMENTOS\n// ============================================================\n// Entrada:\n//   Clientes + investimentos vindos do Merge\n//\n// Cliente:\n//   nome\n//   email\n//   perfil\n//   saldo\n//\n// Investimento:\n//   perfil\n//   produto\n//   minimo\n//   rentabilidade\n//\n// Saída:\n//   1 item para cada cliente\n// ============================================================\n\nconst input = $input.all();\n\nconst clientes = [];\nconst investimentos = [];\n\n\n// ============================================================\n// 1. PERCORRE TODA A ESTRUTURA RECEBIDA DO MERGE\n// ============================================================\n\nfunction analisarEstrutura(valor) {\n\n  if (valor === null || valor === undefined) {\n    return;\n  }\n\n  // Se for array, analisa todos os elementos\n  if (Array.isArray(valor)) {\n\n    for (const item of valor) {\n      analisarEstrutura(item);\n    }\n\n    return;\n  }\n\n  // Ignora valores que não sejam objetos\n  if (typeof valor !== \"object\") {\n    return;\n  }\n\n\n  // ==========================================================\n  // IDENTIFICA CLIENTE\n  // ==========================================================\n\n  const possuiNome =\n    valor.nome !== undefined &&\n    valor.nome !== null &&\n    String(valor.nome).trim() !== \"\";\n\n  const possuiPerfil =\n    valor.perfil !== undefined &&\n    valor.perfil !== null &&\n    String(valor.perfil).trim() !== \"\";\n\n  const possuiSaldo =\n    valor.saldo !== undefined ||\n    valor.saldo_num !== undefined ||\n    valor.saldo_texto !== undefined;\n\n\n  if (\n    possuiNome &&\n    possuiPerfil &&\n    possuiSaldo\n  ) {\n\n    clientes.push(valor);\n  }\n\n\n  // ==========================================================\n  // IDENTIFICA INVESTIMENTO\n  // ==========================================================\n\n  const possuiProduto =\n    valor.produto !== undefined &&\n    valor.produto !== null &&\n    String(valor.produto).trim() !== \"\";\n\n  const possuiMinimo =\n    valor.minimo !== undefined &&\n    valor.minimo !== null;\n\n\n  if (\n    possuiPerfil &&\n    possuiProduto &&\n    possuiMinimo\n  ) {\n\n    investimentos.push(valor);\n  }\n\n\n  // ==========================================================\n  // PROCURA DENTRO DOS CAMPOS DO OBJETO\n  // ==========================================================\n\n  for (const chave of Object.keys(valor)) {\n\n    const conteudo = valor[chave];\n\n    if (\n      typeof conteudo === \"object\" &&\n      conteudo !== null\n    ) {\n\n      analisarEstrutura(conteudo);\n    }\n  }\n}\n\n\n// ============================================================\n// 2. ANALISA TODOS OS ITENS DO MERGE\n// ============================================================\n\nfor (const item of input) {\n  analisarEstrutura(item.json);\n}\n\n\n// ============================================================\n// 3. REMOVE CLIENTES DUPLICADOS\n// ============================================================\n\nconst clientesUnicos = Array.from(\n  new Map(\n    clientes.map((cliente, index) => [\n      cliente.email ||\n      cliente.nome ||\n      `cliente_${index}`,\n      cliente\n    ])\n  ).values()\n);\n\n\n// ============================================================\n// 4. REMOVE INVESTIMENTOS DUPLICADOS\n// ============================================================\n\nconst investimentosUnicos = [];\n\nconst investimentosIds = new Set();\n\nfor (const investimento of investimentos) {\n\n  const id = [\n    investimento.perfil,\n    investimento.produto,\n    investimento.minimo,\n    investimento.rentabilidade\n  ].join(\"|\");\n\n\n  if (!investimentosIds.has(id)) {\n\n    investimentosIds.add(id);\n\n    investimentosUnicos.push(investimento);\n  }\n}\n\n\n// ============================================================\n// 5. CONVERTE VALORES PARA NÚMERO\n// ============================================================\n\nfunction converterNumero(valor) {\n\n  if (\n    valor === undefined ||\n    valor === null ||\n    valor === \"\"\n  ) {\n\n    return 0;\n  }\n\n\n  if (typeof valor === \"number\") {\n    return valor;\n  }\n\n\n  let texto = String(valor)\n    .trim()\n    .replace(/R\\$/gi, \"\")\n    .replace(/\\s/g, \"\");\n\n\n  // Exemplo:\n  // 12.500,00\n  // ↓\n  // 12500.00\n\n  if (texto.includes(\",\")) {\n\n    texto = texto\n      .replace(/\\./g, \"\")\n      .replace(\",\", \".\");\n  }\n\n\n  texto = texto.replace(/[^\\d.-]/g, \"\");\n\n  return Number(texto) || 0;\n}\n\n\n// ============================================================\n// 6. FORMATA VALORES EM REAIS\n// ============================================================\n\nfunction formatarMoeda(valor) {\n\n  return Number(valor || 0).toLocaleString(\n    \"pt-BR\",\n    {\n      style: \"currency\",\n      currency: \"BRL\"\n    }\n  );\n}\n\n\n// ============================================================\n// 7. VERIFICA SE EXISTEM CLIENTES\n// ============================================================\n\nif (clientesUnicos.length === 0) {\n\n  return [\n    {\n      json: {\n        erro: true,\n\n        mensagem:\n          \"Nenhum cliente foi encontrado na entrada do Merge.\",\n\n        itens_recebidos:\n          input.length,\n\n        investimentos_encontrados:\n          investimentosUnicos.length,\n\n        dica:\n          \"O Code encontrou os investimentos, mas não encontrou clientes com nome, perfil e saldo.\"\n      }\n    }\n  ];\n}\n\n\n// ============================================================\n// 8. PROCESSA CADA CLIENTE\n// ============================================================\n\nconst resultado = [];\n\nfor (const cliente of clientesUnicos) {\n\n\n  // ==========================================================\n  // DADOS DO CLIENTE\n  // ==========================================================\n\n  const nome =\n    cliente.nome || \"Cliente\";\n\n\n  const email =\n    cliente.email || \"\";\n\n\n  const perfil =\n    String(cliente.perfil || \"Moderado\").trim();\n\n\n  // ==========================================================\n  // SALDO\n  // ==========================================================\n\n  let saldo = 0;\n\n\n  if (cliente.saldo_num !== undefined) {\n\n    saldo = converterNumero(\n      cliente.saldo_num\n    );\n\n  } else if (cliente.saldo !== undefined) {\n\n    saldo = converterNumero(\n      cliente.saldo\n    );\n\n  } else if (cliente.saldo_texto !== undefined) {\n\n    saldo = converterNumero(\n      cliente.saldo_texto\n    );\n  }\n\n\n  // ==========================================================\n  // 9. ENCONTRA INVESTIMENTOS DO PERFIL DO CLIENTE\n  // ==========================================================\n\n  const investimentosDoPerfil =\n    investimentosUnicos.filter(\n      investimento => {\n\n        const perfilInvestimento =\n          String(investimento.perfil || \"\")\n            .trim()\n            .toLowerCase();\n\n\n        return (\n          perfilInvestimento ===\n          perfil.toLowerCase()\n        );\n      }\n    );\n\n\n  // ==========================================================\n  // 10. SE NÃO EXISTIR INVESTIMENTO PARA O PERFIL\n  // ==========================================================\n\n  if (investimentosDoPerfil.length === 0) {\n\n    const mensagem = [\n      `Olá, ${nome}! 👋`,\n      ``,\n      `Analisamos seu perfil ${perfil} e, no momento, não encontramos um investimento cadastrado especificamente para esse perfil.`,\n      ``,\n      `Assim que novas opções estiverem disponíveis, poderemos analisar novamente para você.`\n    ].join(\"\\n\");\n\n\n    resultado.push({\n      json: {\n\n        nome,\n\n        email,\n\n        perfil,\n\n        saldo_num:\n          saldo,\n\n        saldo_texto:\n          formatarMoeda(saldo),\n\n        recomendacao:\n          null,\n\n        motivo:\n          \"perfil_sem_investimento\",\n\n        mensagem_escolhida:\n          mensagem\n\n      }\n    });\n\n\n    continue;\n  }\n\n\n  // ==========================================================\n  // 11. NORMALIZA OS VALORES MÍNIMOS\n  // ==========================================================\n\n  const opcoes =\n    investimentosDoPerfil.map(\n      investimento => ({\n\n        ...investimento,\n\n        minimo_num:\n          converterNumero(\n            investimento.minimo\n          )\n\n      })\n    );\n\n\n  // ==========================================================\n  // 12. FILTRA INVESTIMENTOS QUE CABEM NO SALDO\n  // ==========================================================\n\n  const disponiveis =\n    opcoes.filter(\n      investimento =>\n        saldo >= investimento.minimo_num\n    );\n\n\n  // ==========================================================\n  // 13. ESCOLHE O INVESTIMENTO\n  // ==========================================================\n\n  let recomendacao;\n\n\n  if (disponiveis.length > 0) {\n\n    // Se o cliente possui saldo suficiente,\n    // escolhe o investimento de maior valor mínimo\n    // que ainda cabe no saldo.\n\n    recomendacao =\n      [...disponiveis].sort(\n        (a, b) =>\n          b.minimo_num -\n          a.minimo_num\n      )[0];\n\n  } else {\n\n    // Se o cliente não possui saldo suficiente,\n    // escolhe o investimento de menor valor mínimo\n    // dentro do perfil.\n\n    recomendacao =\n      [...opcoes].sort(\n        (a, b) =>\n          a.minimo_num -\n          b.minimo_num\n      )[0];\n  }\n\n\n  // ==========================================================\n  // 14. DADOS DA RECOMENDAÇÃO\n  // ==========================================================\n\n  const produto =\n    recomendacao.produto ||\n    \"Investimento\";\n\n\n  const minimo =\n    recomendacao.minimo_num;\n\n\n  const rentabilidade =\n    recomendacao.rentabilidade ||\n    \"Não informada\";\n\n\n  // ==========================================================\n  // 15. VERIFICA SE O SALDO É SUFICIENTE\n  // ==========================================================\n\n  const saldoSuficiente =\n    saldo >= minimo;\n\n\n  const motivo =\n    saldoSuficiente\n      ? \"saldo_ok\"\n      : \"saldo_insuficiente\";\n\n\n  // ==========================================================\n  // 16. CRIA A MENSAGEM PERSONALIZADA\n  // ==========================================================\nlet mensagem;\n\nif (saldoSuficiente) {\n\n  mensagem =\n    `Olá, ${nome}! 👋 ` +\n    `Pelo seu perfil ${perfil}, uma opção que combina com você é o ${produto}. ` +\n    `💰 Valor mínimo: ${formatarMoeda(minimo)} ` +\n    `💵 Seu saldo atual: ${formatarMoeda(saldo)} ` +\n    `📈 Rentabilidade: ${rentabilidade} ` +\n    `Com seu saldo atual, você já possui o valor necessário para investir nessa opção.`;\n\n} else {\n\n  mensagem =\n    `Olá, ${nome}! 👋 ` +\n    `Pelo seu perfil ${perfil}, uma opção que pode ser interessante para você é o ${produto}. ` +\n    `💰 Valor mínimo: ${formatarMoeda(minimo)} ` +\n    `💵 Seu saldo atual: ${formatarMoeda(saldo)} ` +\n    `📈 Rentabilidade: ${rentabilidade} ` +\n    `No momento, seu saldo ainda não é suficiente para atingir o valor mínimo desse investimento. ` +\n    `Porém, essa pode ser uma opção para considerar quando você atingir o valor necessário.`;\n\n}\n\n  // ==========================================================\n  // 17. RETORNA O CLIENTE\n  // ==========================================================\n\n  resultado.push({\n    json: {\n\n      nome,\n\n      email,\n\n      perfil,\n\n      saldo_num:\n        saldo,\n\n      saldo_texto:\n        formatarMoeda(saldo),\n\n      recomendacao: {\n\n        perfil:\n          recomendacao.perfil,\n\n        produto,\n\n        minimo,\n\n        rentabilidade\n\n      },\n\n      motivo,\n\n      mensagem_escolhida:\n        mensagem\n\n    }\n  });\n\n}\n\n\n// ============================================================\n// 18. RETORNA TODOS OS CLIENTES\n// ============================================================\n\nreturn resultado;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        -432
+      ],
+      "id": "6a918d47-cc14-4230-a9b3-34bd6bfc2162",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// CODE NODE - PREPARAÇÃO DOS DADOS PARA IA\n// ============================================================\n// Objetivo:\n// Organizar os dados de cada cliente em um formato limpo\n// para serem enviados posteriormente para uma IA.\n//\n// Saída: 1 item por cliente\n// ============================================================\n\nconst items = $input.all();\n\nconst resultado = [];\n\n\n// ============================================================\n// 1. PROCESSA CADA CLIENTE\n// ============================================================\n\nfor (const item of items) {\n\n  const data = item.json;\n\n\n  // ==========================================================\n  // DADOS DO CLIENTE\n  // ==========================================================\n\n  const email =\n    data.email ||\n    data.email_to ||\n    \"\";\n\n  const nome =\n    data.nome ||\n    \"Cliente\";\n\n  const perfil =\n    data.perfil ||\n    \"Não informado\";\n\n\n  // ==========================================================\n  // SALDO\n  // ==========================================================\n\n  let saldo_num = 0;\n\n  if (data.saldo_num !== undefined) {\n\n    saldo_num = Number(data.saldo_num) || 0;\n\n  } else if (data.saldo !== undefined) {\n\n    saldo_num = converterNumero(data.saldo);\n\n  } else if (data.saldo_texto !== undefined) {\n\n    saldo_num = converterNumero(data.saldo_texto);\n\n  }\n\n\n  // ==========================================================\n  // SALDO FORMATADO\n  // ==========================================================\n\n  const saldo_texto =\n    formatarMoeda(saldo_num);\n\n\n  // ==========================================================\n  // RECOMENDAÇÃO\n  // ==========================================================\n\n  const recomendacaoOriginal =\n    data.recomendacao || {};\n\n\n  const recomendacao = {\n\n    perfil:\n      recomendacaoOriginal.perfil ||\n      perfil,\n\n    produto:\n      recomendacaoOriginal.produto ||\n      \"Não informado\",\n\n    minimo:\n      converterNumero(\n        recomendacaoOriginal.minimo\n      ),\n\n    rentabilidade:\n      recomendacaoOriginal.rentabilidade ||\n      \"Não informada\"\n\n  };\n\n\n  // ==========================================================\n  // MOTIVO\n  // ==========================================================\n\n  const motivo =\n    data.motivo ||\n    \"não informado\";\n\n\n  // ==========================================================\n  // MENSAGEM BASE\n  // ==========================================================\n  // Essa mensagem NÃO é a mensagem final.\n  //\n  // Ela serve como contexto para a IA entender:\n  // quem é o cliente\n  // qual é o perfil\n  // qual investimento foi recomendado\n  // qual é o saldo\n  // ==========================================================\n\n  let mensagem_base;\n\n  if (motivo === \"saldo_ok\") {\n\n    mensagem_base =\n      `${nome}, indo direto ao ponto: para o perfil ${perfil}, ` +\n      `o ${recomendacao.produto} é uma opção compatível. ` +\n      `(mínimo ${formatarMoeda(recomendacao.minimo)}). ` +\n      `Você tem ${saldo_texto}, então dá pra aplicar. ` +\n      `Rentabilidade: ${recomendacao.rentabilidade}.`;\n\n  } else if (motivo === \"saldo_insuficiente\") {\n\n    mensagem_base =\n      `${nome}, para o perfil ${perfil}, ` +\n      `o ${recomendacao.produto} pode ser uma opção interessante. ` +\n      `(mínimo ${formatarMoeda(recomendacao.minimo)}). ` +\n      `Você tem ${saldo_texto}, então ainda não atinge o valor mínimo. ` +\n      `Rentabilidade: ${recomendacao.rentabilidade}.`;\n\n  } else {\n\n    mensagem_base =\n      `${nome}, identificamos seu perfil como ${perfil}. ` +\n      `A recomendação atual é ${recomendacao.produto}. ` +\n      `Valor mínimo: ${formatarMoeda(recomendacao.minimo)}. ` +\n      `Rentabilidade: ${recomendacao.rentabilidade}.`;\n\n  }\n\n\n  // ==========================================================\n  // REGRAS PARA A IA\n  // ==========================================================\n\n  const copy_rules = {\n\n    idioma: \"pt-BR\",\n\n    tom: \"amigável e profissional\",\n\n    tamanho: \"curto (4-6 linhas)\",\n\n    evitar: [\n      \"promessas de ganho\",\n      \"garantias\",\n      \"linguagem agressiva\"\n    ]\n\n  };\n\n\n  // ==========================================================\n  // 2. MONTA O OBJETO FINAL\n  // ==========================================================\n\n  resultado.push({\n\n    json: {\n\n      email_to: email,\n\n      nome,\n\n      perfil,\n\n      saldo_texto,\n\n      saldo_num,\n\n      recomendacao,\n\n      motivo,\n\n      mensagem_base,\n\n      copy_rules\n\n    }\n\n  });\n\n}\n\n\n// ============================================================\n// 3. RETORNA TODOS OS CLIENTES\n// ============================================================\n\nreturn resultado;\n\n\n// ============================================================\n// FUNÇÃO - CONVERTER VALOR\n// ============================================================\n\nfunction converterNumero(valor) {\n\n  if (\n    valor === undefined ||\n    valor === null ||\n    valor === \"\"\n  ) {\n\n    return 0;\n  }\n\n\n  if (typeof valor === \"number\") {\n\n    return valor;\n  }\n\n\n  let texto =\n    String(valor)\n      .trim()\n      .replace(/R\\$/gi, \"\")\n      .replace(/\\s/g, \"\");\n\n\n  // Exemplo:\n  // 12.500,00\n  // ↓\n  // 12500.00\n\n  if (texto.includes(\",\")) {\n\n    texto =\n      texto\n        .replace(/\\./g, \"\")\n        .replace(\",\", \".\");\n\n  }\n\n\n  texto =\n    texto.replace(/[^\\d.-]/g, \"\");\n\n\n  return Number(texto) || 0;\n}\n\n\n// ============================================================\n// FUNÇÃO - FORMATAR MOEDA\n// ============================================================\n\nfunction formatarMoeda(valor) {\n\n  return Number(valor || 0).toLocaleString(\n    \"pt-BR\",\n    {\n      style: \"currency\",\n      currency: \"BRL\"\n    }\n  );\n\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        -432
+      ],
+      "id": "b428bf3b-55c3-4f4b-8ae3-f8c2db015035",
+      "name": "Code in JavaScript2"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-3-flash-preview",
+          "mode": "list",
+          "cachedResultName": "models/gemini-3-flash-preview"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=Você é responsável por criar e-mails personalizados para clientes.\n\nVocê receberá os dados de vários clientes em um único JSON.\n\nSua tarefa é criar UM e-mail individual para CADA cliente recebido.\n\nIMPORTANTE:\n- Nunca misture informações entre clientes.\n- Cada cliente deve receber somente informações referentes a ele.\n- Preserve exatamente o \"id_cliente\" e o \"email_to\".\n- Crie exatamente um e-mail para cada cliente.\n- Não pule nenhum cliente.\n- Não crie clientes que não estejam nos dados.\n- Use somente as informações fornecidas.\n\nREGRAS DOS E-MAILS:\n\n1. Escreva em português do Brasil (pt-BR).\n2. Use o nome do cliente.\n3. Considere o perfil do cliente.\n4. Apresente o investimento recomendado para aquele cliente.\n5. Informe o valor mínimo do investimento.\n6. Informe o saldo atual.\n7. Informe a rentabilidade exatamente como recebida.\n8. Se o motivo for \"saldo_ok\", informe que o saldo atual atende ao valor mínimo.\n9. Se o motivo for \"saldo_insuficiente\", informe que o saldo atual ainda não atende ao valor mínimo.\n10. Não faça promessas de ganhos.\n11. Não ofereça garantias de rentabilidade ou resultados.\n12. Não use expressões como \"ganho garantido\", \"retorno garantido\", \"lucro garantido\", \"sem risco\" ou similares.\n13. Não pressione o cliente a investir.\n14. Não invente informações.\n15. Não altere valores, nomes, produtos ou percentuais.\n16. O texto deve ser curto e profissional.\n17. Evite linguagem excessivamente comercial.\n18. Cada e-mail deve ter aproximadamente 4 a 6 linhas.\n19. Retorne somente o JSON solicitado abaixo.\n\nFORMATO OBRIGATÓRIO:\n\n{\n  \"emails\": [\n    {\n      \"id_cliente\": 1,\n      \"email_to\": \"email-do-cliente\",\n      \"assunto\": \"Sugestão de investimento\",\n      \"mensagem\": \"Texto completo do e-mail\"\n    }\n  ]\n}\n\nREGRAS DA RESPOSTA:\n\n- \"emails\" deve conter exatamente a mesma quantidade de clientes recebidos.\n- \"id_cliente\" deve ser mantido exatamente como recebido.\n- \"email_to\" deve ser mantido exatamente como recebido.\n- Cada mensagem deve utilizar exclusivamente os dados do respectivo cliente.\n- Não inclua comentários antes ou depois do JSON.\n- Não utilize Markdown.\n- Não coloque o JSON dentro de ```.\n\nDADOS DOS CLIENTES:\n\n{{ JSON.stringify($json, null, 2) }}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.2,
+      "position": [
+        1568,
+        -432
+      ],
+      "id": "3ae32e50-b778-4129-9422-c5ddbfbec59d",
+      "name": "Message a model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "ziFvoOJAwvi3AwU5",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// AGRUPAR TODOS OS CLIENTES EM UM ÚNICO ITEM\n// ============================================================\n\nconst items = $input.all();\n\nconst clientes = [];\n\nfor (let i = 0; i < items.length; i++) {\n\n  const data = items[i].json;\n\n  clientes.push({\n    id_cliente: i + 1,\n\n    email_to: data.email_to || data.email || \"\",\n\n    nome: data.nome || \"Cliente\",\n\n    perfil: data.perfil || \"\",\n\n    saldo_texto: data.saldo_texto || \"\",\n\n    saldo_num: Number(data.saldo_num) || 0,\n\n    recomendacao: {\n      perfil:\n        data.recomendacao?.perfil ||\n        data.perfil ||\n        \"\",\n\n      produto:\n        data.recomendacao?.produto ||\n        \"\",\n\n      minimo:\n        Number(data.recomendacao?.minimo) || 0,\n\n      rentabilidade:\n        data.recomendacao?.rentabilidade ||\n        \"\"\n    },\n\n    motivo:\n      data.motivo || \"\",\n\n    mensagem_base:\n      data.mensagem_base || \"\",\n\n    copy_rules:\n      data.copy_rules || {\n        idioma: \"pt-BR\",\n        tom: \"amigável e profissional\",\n        tamanho: \"curto (4-6 linhas)\",\n        evitar: [\n          \"promessas de ganho\",\n          \"garantias\",\n          \"linguagem agressiva\"\n        ]\n      }\n  });\n}\n\n\n// ============================================================\n// RETORNA UM ÚNICO ITEM\n// ============================================================\n\nreturn [\n  {\n    json: {\n      quantidade_clientes: clientes.length,\n      clientes: clientes\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        -432
+      ],
+      "id": "7d3e218a-7797-4fed-a14a-a22d13331c26",
+      "name": "Juntar os clientes em 1 item só"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst dados = $json;\n\n// 1. Identifica a resposta gerada pelo node anterior\nconst resposta =\n  dados.output ??\n  dados.text ??\n  dados.response ??\n  dados.answer ??\n  dados.message ??\n  dados.content ??\n  '';\n\nlet mensagem = typeof resposta === 'string'\n  ? resposta\n  : JSON.stringify(resposta);\n\nmensagem = mensagem.trim();\n\n// 2. Remove blocos Markdown, caso existam\nmensagem = mensagem\n  .replace(/^```(?:html|text|markdown)?\\s*/i, '')\n  .replace(/\\s*```$/i, '')\n  .trim();\n\n// 3. Extrai o assunto, se a resposta já contiver \"Assunto:\"\nconst correspondencia = mensagem.match(/^Assunto:\\s*(.+)$/im);\n\nconst assunto = correspondencia\n  ? correspondencia[1].trim()\n  : 'Retorno da sua solicitação';\n\nif (correspondencia) {\n  mensagem = mensagem\n    .replace(/^Assunto:\\s*.+\\n?/im, '')\n    .trim();\n}\n\n// 4. Adiciona saudação se não houver uma\nif (!/^(olá|ola|bom dia|boa tarde|boa noite|prezado|prezada)\\b/i.test(mensagem)) {\n  mensagem = `Olá!<br><br>${mensagem}`;\n}\n\n// 5. Converte quebras de linha em HTML\nmensagem = mensagem.replace(/\\r\\n|\\r|\\n/g, '<br>');\n\n// 6. Adiciona despedida se não houver uma\nif (!/(atenciosamente|cordialmente|abraços|abraço|fico à disposição|fico a disposição)/i.test(mensagem)) {\n  mensagem += '<br><br>Atenciosamente,<br>Equipe de Atendimento';\n}\n\n// 7. Monta o HTML do e-mail\nconst mensagemHtml = `\n<div style=\"font-family: Arial, Helvetica, sans-serif; font-size: 14px; color: #333333; line-height: 1.6;\">\n  ${mensagem}\n</div>\n`.trim();\n\n// 8. Retorna os campos para o Gmail\nreturn {\n  json: {\n    to: dados.email_to ?? dados.email ?? '',\n    subject: assunto,\n    message: mensagemHtml\n  }\n};\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        -432
+      ],
+      "id": "0e41f4a1-946c-467b-aaaa-f2d44f2a1822",
+      "name": "formatar resposta para e-mail"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "message": "={{ $json.message }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        2368,
+        -432
+      ],
+      "id": "379ae2b6-9919-4c87-b3ed-ba7b63c5fc21",
+      "name": "Enviar e-mail",
+      "webhookId": "52c75e26-721d-401b-9d88-93fde2a9a6ef"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "199b83dd-a0aa-4922-bbed-170b0bf01b3c",
+              "leftValue": "={{ $json.to }}",
+              "rightValue": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$",
+              "operator": {
+                "type": "string",
+                "operation": "regex"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2144,
+        -432
+      ],
+      "id": "00c2a76d-d92b-433a-82b6-1608f0b4a501",
+      "name": "Validar cliente "
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        672,
+        -432
+      ],
+      "id": "48c64d6b-4c49-4bd3-9bac-9d4fccc47152",
+      "name": "Unificar as informações"
+    },
+    {
+      "parameters": {
+        "url": "https://digitalinnovationone.github.io/dio-lab-assistente-investimentos-rpa-n8n/data.csv",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        224,
+        -352
+      ],
+      "id": "70d15e15-2437-4106-9f9d-c2b21e6b65fd",
+      "name": "Obter tipos de investimentos "
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pega o CSV como texto vindo do HTTP Request\nconst csvRaw = $json.data ?? $json.body ?? $json;\n\nconst text = typeof csvRaw === \"string\"\n  ? csvRaw\n  : JSON.stringify(csvRaw);\n\n// Divide o CSV em linhas\nconst lines = text\n  .split(/\\r?\\n/)\n  .map(line => line.trim())\n  .filter(Boolean);\n\n// Verifica se existe conteúdo\nif (lines.length === 0) {\n  return [{\n    json: {\n      investimentos: []\n    }\n  }];\n}\n\n// Extrai os cabeçalhos\nconst headers = lines[0]\n  .split(\",\")\n  .map(header => header.trim());\n\n// Converte as linhas em objetos\nconst investimentos = lines.slice(1).map(line => {\n  const cols = line\n    .split(\",\")\n    .map(col => col.trim());\n\n  const obj = {};\n\n  headers.forEach((header, index) => {\n    obj[header] = cols[index] ?? \"\";\n  });\n\n  // Normaliza o campo \"minimo\" para número\n  if (obj.minimo !== undefined) {\n    const valor = String(obj.minimo)\n      .replace(/\\./g, \"\")\n      .replace(\",\", \".\")\n      .replace(/[^\\d.-]/g, \"\");\n\n    obj.minimo = Number(valor) || 0;\n  }\n\n  return obj;\n});\n\n// Retorna os investimentos para o próximo node\nreturn [\n  {\n    json: {\n      investimentos\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        -352
+      ],
+      "id": "f33004d3-8d5b-4915-9c2d-3b2bae6153de",
+      "name": "Formtar resposta de Investimentos "
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Obter tipos de investimentos ",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Unificar as informações",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond to Webhook": {
+      "main": [
+        []
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript2": {
+      "main": [
+        [
+          {
+            "node": "Juntar os clientes em 1 item só",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message a model": {
+      "main": [
+        [
+          {
+            "node": "formatar resposta para e-mail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Juntar os clientes em 1 item só": {
+      "main": [
+        [
+          {
+            "node": "Message a model",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "formatar resposta para e-mail": {
+      "main": [
+        [
+          {
+            "node": "Validar cliente ",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar e-mail": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar cliente ": {
+      "main": [
+        [
+          {
+            "node": "Enviar e-mail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Unificar as informações": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Obter tipos de investimentos ": {
+      "main": [
+        [
+          {
+            "node": "Formtar resposta de Investimentos ",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Formtar resposta de Investimentos ": {
+      "main": [
+        [
+          {
+            "node": "Unificar as informações",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "7ff7ce7c-6e06-40e4-a77e-8f9d07204a66",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "35b5070a2c6bd2f0645dce015ac46a82892b324b226e8814bc2c5f502e191450"
+  },
+  "nodeGroups": [],
+  "id": "oiyoGUiAnO8SbLIC",
+  "tags": []
+}
